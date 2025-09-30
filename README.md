@@ -155,8 +155,4 @@ scrapy crawl generic_article -a url="https://foodieinlagos.com/review-ajoke-alam
 
 ## License
 
-[Insert your license here]
-
----
-
-**⚠️ Replace placeholders**: `<repo_url>`, `<your_api_token>`, links to backend/frontend repos, API specs, and license.
+[License here]
