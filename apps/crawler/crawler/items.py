@@ -20,5 +20,5 @@ class PageItem(scrapy.Item):
     source_id = scrapy.Field()
     discovery_type = scrapy.Field()
     score = scrapy.Field()
-    signals = {}
-    candidate = {}
+    signals = scrapy.Field(default=dict)
+    candidate = scrapy.Field(default=dict)

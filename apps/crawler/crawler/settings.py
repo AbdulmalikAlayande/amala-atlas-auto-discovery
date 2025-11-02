@@ -9,8 +9,8 @@
 
 BOT_NAME = "crawler"
 
-SPIDER_MODULES = ["crawler.spiders"]
-NEWSPIDER_MODULE = "crawler.spiders"
+SPIDER_MODULES = ["apps.crawler.crawler.spiders"]
+NEWSPIDER_MODULE = "apps.crawler.crawler.spiders"
 
 ADDONS = {}
 
@@ -19,7 +19,7 @@ ADDONS = {}
 #USER_AGENT = "crawler (+http://www.yourdomain.com)"
 
 # Obey robots.txt rules
-ROBOTSTXT_OBEY = True
+ROBOTSTXT_OBEY = False
 
 # Concurrency and throttling settings
 #CONCURRENT_REQUESTS = 16
@@ -46,9 +46,11 @@ DOWNLOAD_DELAY = 1
 
 # Enable or disable downloader middlewares
 # See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html
-#DOWNLOADER_MIDDLEWARES = {
-#    "crawler.middlewares.CrawlerDownloaderMiddleware": 543,
-#}
+DOWNLOADER_MIDDLEWARES = {
+    # "crawler.middlewares.CrawlerDownloaderMiddleware": 543,
+    'scrapy.downloadermiddlewares.useragent.UserAgentMiddleware': None,
+    'scrapy_user_agents.middlewares.RandomUserAgentMiddleware': 400,
+}
 
 # Enable or disable extensions
 # See https://docs.scrapy.org/en/latest/topics/extensions.html
@@ -57,7 +59,10 @@ DOWNLOAD_DELAY = 1
 #}
 
 ITEM_PIPELINES = {
-   "crawler.pipelines.CrawlerPipeline": 300,
+   # "crawler.pipelines.ExtractSignalsPipeline": 100,
+   # "crawler.pipelines.ScorePipeline": 200,
+   # "crawler.pipelines.DedupePipeline": 300,
+   # "crawler.pipelines.PublishPipeline": 400,
 }
 
 # Enable and configure the AutoThrottle extension (disabled by default)

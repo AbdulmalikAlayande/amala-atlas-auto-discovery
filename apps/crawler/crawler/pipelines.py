@@ -41,7 +41,7 @@ class ExtractSignalsPipeline:
             "has_phone": bool(phone),
             "recent_content": bool(readable.get("is_recent")),
             "city_hit_near_food_terms": bool(city_hits),
-            "listicle_penalty": "list" in (readable.get("title", "").lower()),
+            # "listicle_penalty": "list" in (readable.get("title", "").lower()),
         }
 
 

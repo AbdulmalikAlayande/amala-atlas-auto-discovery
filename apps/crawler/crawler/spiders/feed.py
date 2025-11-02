@@ -1,5 +1,5 @@
 import scrapy
-
+from trafilatura import feeds
 
 class FeedSpider(scrapy.Spider):
     name = "feed"
