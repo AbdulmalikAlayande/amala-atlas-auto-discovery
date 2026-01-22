@@ -59,10 +59,10 @@ DOWNLOADER_MIDDLEWARES = {
 #}
 
 ITEM_PIPELINES = {
-   # "crawler.pipelines.ExtractSignalsPipeline": 100,
-   # "crawler.pipelines.ScorePipeline": 200,
-   # "crawler.pipelines.DedupePipeline": 300,
-   # "crawler.pipelines.PublishPipeline": 400,
+   "apps.crawler.crawler.pipelines.ExtractSignalsPipeline": 100,
+   "apps.crawler.crawler.pipelines.ScorePipeline": 200,
+   "apps.crawler.crawler.pipelines.DedupePipeline": 300,
+   "apps.crawler.crawler.pipelines.PublishPipeline": 400,
 }
 
 # Enable and configure the AutoThrottle extension (disabled by default)
