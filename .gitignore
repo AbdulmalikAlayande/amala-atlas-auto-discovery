@@ -37,3 +37,4 @@ configs/.env.local
 .spyproject
 
 ### Git ###
+agent-reference/
