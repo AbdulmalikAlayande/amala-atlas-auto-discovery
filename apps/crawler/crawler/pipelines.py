@@ -1,22 +1,55 @@
-import hashlib, logging, os
+import hashlib
+import logging
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from scrapy.exceptions import DropItem
 
-from apps.core.publisher.client import publish_candidate
-from apps.core.extractor.article import extract_readable, extract_jsonld, extract_outlinks
-from apps.core.nlp.fields import find_phone, find_address_tokens, find_city_hits
+from apps.core.dedupe.resolve import dedupe_key, is_dup
+from apps.core.enrichment.geocoding import enrich_location
+from apps.core.enrichment.maps import enrich_from_maps_links
+from apps.core.enrichment.social import enrich_from_socials
+from apps.core.extractor.functions import extract_readable, extract_jsonld, extract_outlinks
+from apps.core.nlp.fields import find_phone, find_city_hits
+from apps.core.nlp.gate import passes_candidate_gate
+from apps.core.publisher.init import ClientConfig, SyncBackendClient
 from apps.core.scoring.rules import score as score_page
 
 log = logging.getLogger(__name__)
 load_dotenv()
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
-API_TOKEN    = os.getenv("API_TOKEN", "dev-token")
+API_TOKEN = os.getenv("API_TOKEN", "dev-token")
 ACCEPT_THRESHOLD = float(os.getenv("ACCEPT_THRESHOLD", "0.45"))
-TARGET_CITIES = [c.strip() for c in os.getenv("TARGET_CITIES","Lagos,Ibadan").split(",") if c.strip()]
+TARGET_CITIES = [c.strip() for c in os.getenv("TARGET_CITIES", "Lagos,Ibadan").split(",") if c.strip()]
+
+
+class NLPGatePipeline:
+    """Stage 3: Candidate Gate - Filter non-venue content early."""
+
+    def process_item(self, item, spider):
+        html = item.get("html") or ""
+
+        readable = extract_readable(html)
+        text = readable.get("text", "")
+        title = readable.get("title", "")
+
+        passes, gate_signals = passes_candidate_gate(text, title)
+
+        if not passes:
+            fail_reason = gate_signals.get("fail_reason", "unknown")
+            log.info(f"[NLP GATE] REJECT: {fail_reason} - {item.get('url')}")
+            raise DropItem(f"Failed NLP gate: {fail_reason}")
+
+        item['gate_signals'] = gate_signals
+        log.info(f"[NLP GATE] PASS - {item.get('url')}")
+
+        return item
+
 
 class ExtractSignalsPipeline:
+    """Stage 4: Field Extraction - Extract structured data from HTML."""
 
     def process_item(self, item, spider):
         html = item.get("html") or ""
@@ -29,65 +62,120 @@ class ExtractSignalsPipeline:
         city_hits = find_city_hits(readable.get("text", ""), TARGET_CITIES)
 
         signals = self.build_signals(jsonld, outlinks, readable, phone, city_hits)
-        log.info(f"Signals: {signals}")
+
+        # Store extracted data for enrichment stage
+        item['extracted'] = {
+            'readable': readable,
+            'jsonld': jsonld,
+            'outlinks': outlinks,
+            'phone': phone,
+            'city_hits': city_hits,
+        }
+
+        log.info(f"[EXTRACT] Signals: {signals}")
         item['signals'] = signals
         return item
 
     def build_signals(self, jsonld, outlinks, readable, phone, city_hits):
-        print(self.__repr__())
         return {
             "has_jsonld_restaurant": bool(jsonld and jsonld.get("name") and jsonld.get("address")),
-            "has_maps_link": outlinks.get("maps_links"),
+            "has_maps_link": bool(outlinks.get("maps_links")),
             "has_phone": bool(phone),
             "recent_content": bool(readable.get("is_recent")),
             "city_hit_near_food_terms": bool(city_hits),
-            # "listicle_penalty": "list" in (readable.get("title", "").lower()),
         }
 
 
-class ScorePipeline:
+class EnrichmentPipeline:
+    """
+    Stage 5: Enrichment - Add geocoding, maps data, and social metadata.
+
+    This runs AFTER field extraction but BEFORE scoring.
+    Enrichment can improve scores by adding lat/lng and better data.
+    """
 
     def process_item(self, item, spider):
-        html = item.get("html") or ""
+        extracted = item.get('extracted', {})
+
+        # Build initial fields from extraction
+        jsonld = extracted.get('jsonld', {})
+        phone = extracted.get('phone')
+        city_hits = extracted.get('city_hits', [])
+        outlinks = extracted.get('outlinks', {})
+
+        fields = {
+            "name": jsonld.get("name") if jsonld else None,
+            "address": jsonld.get("address") if jsonld else None,
+            "city": city_hits[0] if city_hits else None,
+            "country": "Nigeria",
+            "phone": phone,
+            "hours": jsonld.get("openingHours") if jsonld else None,
+            "socials": outlinks.get("social_links", {}),
+        }
+
+        # Enrichment Stage 1: Try to get location from maps links first
+        maps_links = outlinks.get("maps_links", [])
+        if maps_links:
+            log.info(f"[ENRICH] Processing {len(maps_links)} maps links")
+            fields = enrich_from_maps_links(fields, maps_links)
+
+        # Enrichment Stage 2: Geocode address if we still don't have coordinates
+        if not fields.get('lat'):
+            log.info(f"[ENRICH] Attempting geocoding")
+            fields = enrich_location(fields)
+
+        # Enrichment Stage 3: Fetch social metadata (optional, can be slow)
+        if os.getenv("ENRICH_SOCIALS", "false").lower() == "true":
+            if fields.get('socials'):
+                log.info(f"[ENRICH] Fetching social metadata")
+                fields = enrich_from_socials(fields, fields['socials'])
+
+        # Store enriched fields
+        item['enriched_fields'] = fields
+
+        log.info(
+            f"[ENRICH] Complete: lat={fields.get('lat')}, lng={fields.get('lng')}, precision={fields.get('geo_precision')}")
+
+        return item
+
+
+class ScorePipeline:
+    """Stage 7: Scoring - Compute confidence score based on signals."""
+
+    def process_item(self, item, spider):
         final_url = item.get("final_url") or item.get("url")
         source_id = item.get("source_id")
         discovery_type = item.get("discovery_type")
         fetched_at = item.get("fetched_at")
 
-        readable = extract_readable(html)
-        jsonld = extract_jsonld(html)
-        outlinks = extract_outlinks(html, final_url)
-        phone = find_phone(readable.get("text", ""))
-        addr_tokens = find_address_tokens(readable.get("text", ""))
-        city_hits = find_city_hits(readable.get("text", ""), TARGET_CITIES)
+        # Get enriched fields
+        fields = item.get('enriched_fields', {})
+        extracted = item.get('extracted', {})
 
-        # Fields: Best-effort, To be improved later from JSON-LD/regex
-        fields = {
-            "name": (jsonld.get("name") if jsonld else None),
-            "address": (jsonld.get("address") if jsonld else None),
-            "area": None,
-            "city": city_hits[0] if city_hits else None,
-            "state": None,
-            "country": "Nigeria",
-            "phone": phone,
-            "hours": (jsonld.get("openingHours") if jsonld else None),
-            "price": None,
-            "socials": outlinks.get("social_links", {}),
-            "lat": None, "lng": None, "geo_precision": "unknown"
-        }
+        # Build candidate
+        candidate = self.build_candidate(
+            discovery_type, fetched_at, fields, final_url,
+            extracted, source_id
+        )
 
-        candidate = self.build_candidate(discovery_type, fetched_at, fields, final_url, jsonld, outlinks, readable, source_id)
-        score, why = score_page(signals=item.signals, hint_boost_names=[])
+        # Score the candidate
+        score, why = score_page(signals=item['signals'], hint_boost_names=[])
         candidate["score"] = score
-        candidate["signals"] = {**item.signals, "why": why}
+        candidate["signals"] = {**item['signals'], "why": why}
 
         item['score'] = score
         item['candidate'] = candidate
+
+        log.info(f"[SCORE] {score:.2f} - {final_url}")
+
         return item
 
-    def build_candidate(self, discovery_type, fetched_at, fields, final_url, jsonld, outlinks, readable,
-                        source_id):
-        print(self.__repr__())
+    def build_candidate(self, discovery_type, fetched_at, fields, final_url,
+                        extracted, source_id):
+        readable = extracted.get('readable', {})
+        jsonld = extracted.get('jsonld', {})
+        outlinks = extracted.get('outlinks', {})
+
         return {
             "fields": fields,
             "score": 0.0,
@@ -95,7 +183,7 @@ class ScorePipeline:
             "evidence": {
                 "source_url": final_url,
                 "title": readable.get("title"),
-                "excerpt": (readable.get("text","")[:500] or "").strip(),
+                "excerpt": (readable.get("text", "")[:500] or "").strip(),
                 "jsonld": jsonld,
                 "maps_links": outlinks.get("maps_links", []),
             },
@@ -103,39 +191,107 @@ class ScorePipeline:
                 "source_id": source_id,
                 "discovery_type": discovery_type,
                 "fetched_at": fetched_at,
-                "extractor_version": "v0.1.0",
+                "extractor_version": "v0.2.0",
             },
             "candidate_key": hashlib.sha256((final_url or "").encode("utf-8")).hexdigest(),
         }
 
+
 class DedupePipeline:
+    """Stage 6: Deduplication - Prevent publishing the same venue twice."""
+
+    def __init__(self):
+        self.cache_path = Path(".seen_cache")
+        self.cache_path.mkdir(exist_ok=True)
+        self.seen_keys = {}
 
     def process_item(self, item, spider):
-        seen_key = f"seen_{item.candidate['candidate_key']}"
-        cache_path = Path(".seen_cache")
-        cache_path.mkdir(exist_ok=True)
+        candidate = item.get('candidate', {})
 
-        key_file = cache_path / seen_key
-        if key_file.exists():
-            log.info(f"[DEDUPE] already published {item.final_url}")
-            return item
-        key_file.write_text("1")
+        dedupe_data = dedupe_key(candidate)
+        cache_key = self._generate_cache_key(dedupe_data)
+
+        if self._is_duplicate(cache_key, dedupe_data):
+            log.info(f"[DEDUPE] Duplicate found: {item.get('final_url')}")
+            raise DropItem("Duplicate candidate")
+
+        self._mark_seen(cache_key, dedupe_data)
+
         return item
+
+    def _generate_cache_key(self, dedupe_data: dict) -> str | None:
+        phone = dedupe_data.get('phone')
+        if phone:
+            return f"phone_{phone}"
+
+        geohash = dedupe_data.get('geohash5')
+        name = dedupe_data.get('name_norm', '').replace(' ', '_')[:30]
+        if geohash and name:
+            return f"geo_{geohash}_{name}"
+
+        # FIXME: Should have a fallback that is not `returning None`
+        return None
+
+    def _is_duplicate(self, cache_key: str, dedupe_data: dict) -> bool:
+        if not cache_key:
+            return False
+
+        if cache_key in self.seen_keys:
+            cached_data = self.seen_keys[cache_key]
+            if is_dup(dedupe_data, cached_data):
+                return True
+
+        key_file = self.cache_path / cache_key
+        if key_file.exists():
+            return True
+
+        return False
+
+    def _mark_seen(self, cache_key: str, dedupe_data: dict):
+        if not cache_key:
+            return
+
+        self.seen_keys[cache_key] = dedupe_data
+
+        key_file = self.cache_path / cache_key
+        key_file.write_text("1")
 
 
 class PublishPipeline:
+    """Stage 8: Publishing - Send candidates to backend."""
 
     def process_item(self, item, spider):
+        candidate = item.get('candidate', {})
+        score = item.get('score', 0.0)
+        signals = item.get('signals', {})
 
-        has_key_fact = item.signals["has_jsonld_restaurant"] or item.signals["has_phone"] or item.signals["has_maps_link"]
-        if not (has_key_fact and item.score >= ACCEPT_THRESHOLD):
-            log.info(f"[DROP] score: {item.score:.2f}, url: {item.final_url}")
-            return item
+        has_key_fact = (
+                signals.get("has_jsonld_restaurant") or
+                signals.get("has_phone") or
+                signals.get("has_maps_link")
+        )
+
+        if not has_key_fact:
+            log.info(f"[PUBLISH] DROP: No key facts - {item.get('final_url')}")
+            raise DropItem("No key facts (JSON-LD, phone, or maps)")
+
+        if score < ACCEPT_THRESHOLD:
+            log.info(f"[PUBLISH] DROP: Score {score:.2f} < {ACCEPT_THRESHOLD} - {item.get('final_url')}")
+            raise DropItem(f"Score below threshold: {score:.2f}")
 
         try:
-            resp = publish_candidate(API_BASE_URL, API_TOKEN, item.candidate)
-            log.info(f"[PUBLISH OK] score={item.score:.2f} url={item.final_url} id={resp.get('id')}")
+            config = ClientConfig(base_url=API_BASE_URL, token=API_TOKEN)
+            client = SyncBackendClient(config)
+            resp = client.publish_candidate(candidate)
+
+            if resp.success:
+                log.info(f"[PUBLISH] SUCCESS: score={score:.2f} url={item.get('final_url')}")
+            else:
+                log.error(f"[PUBLISH] FAILED: {item.get('final_url')} - {resp.error}")
+                raise DropItem(f"Publish failed: {resp.error}")
+
         except Exception as e:
-            log.exception(f"[PUBLISH FAIL] {item.final_url}: {e}")
+            log.exception(f"[PUBLISH] ERROR: {item.get('final_url')} - {e}")
+            raise DropItem(f"Publish error: {e}")
 
         return item
