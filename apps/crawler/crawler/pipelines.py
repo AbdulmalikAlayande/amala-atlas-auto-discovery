@@ -1,6 +1,8 @@
 import hashlib
+import json
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -22,7 +24,7 @@ load_dotenv()
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 API_TOKEN = os.getenv("API_TOKEN", "dev-token")
-ACCEPT_THRESHOLD = float(os.getenv("ACCEPT_THRESHOLD", "0.45"))
+ACCEPT_THRESHOLD = float(os.getenv("ACCEPT_THRESHOLD", "0.10"))
 TARGET_CITIES = [c.strip() for c in os.getenv("TARGET_CITIES", "Lagos,Ibadan").split(",") if c.strip()]
 
 
@@ -171,7 +173,7 @@ class ScorePipeline:
         item['score'] = score
         item['candidate'] = candidate
 
-        log.info(f"[SCORE] {score:.2f} - {final_url}")
+        log.info(f"[SCORE] {score:.2f} - {final_url} - reasons: {why.get('reasons')}")
 
         return item
 
@@ -277,27 +279,45 @@ class PublishPipeline:
         has_key_fact = (
                 signals.get("has_jsonld_restaurant") or
                 signals.get("has_phone") or
-                signals.get("has_maps_link")
+                signals.get("has_maps_link") or
+                signals.get("city_hit_near_food_terms")
         )
 
         if not has_key_fact:
             log.info(f"[PUBLISH] DROP: No key facts - {item.get('final_url')}")
-            raise DropItem("No key facts (JSON-LD, phone, or maps)")
+            # raise DropItem("No key facts (JSON-LD, phone, or maps)")
+            return item
 
         if score < ACCEPT_THRESHOLD:
             log.info(f"[PUBLISH] DROP: Score {score:.2f} < {ACCEPT_THRESHOLD} - {item.get('final_url')}")
-            raise DropItem(f"Score below threshold: {score:.2f}")
+            # raise DropItem(f"Score below threshold: {score:.2f}")
+            return item
+
+        def sanitize(obj):
+            if isinstance(obj, dict):
+                return {k: sanitize(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [sanitize(i) for i in obj]
+            if hasattr(obj, "isoformat"):
+                return obj.isoformat()
+            if callable(obj):
+                return str(obj)
+            return obj
 
         try:
             config = ClientConfig(base_url=API_BASE_URL, token=API_TOKEN)
             client = SyncBackendClient(config)
-            resp = client.publish_candidate(candidate)
+            
+            publish_payload = sanitize(candidate)
+            
+            resp = client.publish_candidate(publish_payload)
 
             if resp.success:
                 log.info(f"[PUBLISH] SUCCESS: score={score:.2f} url={item.get('final_url')}")
             else:
                 log.error(f"[PUBLISH] FAILED: {item.get('final_url')} - {resp.error}")
-                raise DropItem(f"Publish failed: {resp.error}")
+                # Don't drop item if publish failed, just log it
+                # raise DropItem(f"Publish failed: {resp.error}")
 
         except Exception as e:
             log.exception(f"[PUBLISH] ERROR: {item.get('final_url')} - {e}")
