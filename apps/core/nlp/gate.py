@@ -9,7 +9,7 @@ Returns: bool (pass/fail) + signals explaining why
 
 import re
 import logging
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Any
 
 log = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ class CandidateGate:
     def __init__(self,
                  min_food_keywords: int = 1,
                  min_venue_keywords: int = 2,
-                 min_total_words: int = 50):
+                 min_total_words: int = 10):
         """
         Args:
             min_food_keywords: Minimum food-related keywords to pass
@@ -89,7 +89,7 @@ class CandidateGate:
             title: Page title (optional, but helps)
 
         Returns:
-            (passes: bool, signals: dict)
+            tuple: (passes: bool, signals: dict)
         """
         if not text:
             return False, {"reason": "empty_content"}
@@ -105,24 +105,25 @@ class CandidateGate:
                 "word_count": len(words)
             }
 
-        # Count keyword hits
+        # Count the number of keyword hits
         food_hits = self._count_keywords(full_text, self.FOOD_KEYWORDS)
         venue_hits = self._count_keywords(full_text, self.VENUE_KEYWORDS)
         city_hits = self._count_keywords(full_text, self.NIGERIAN_CITIES)
 
-        # Check patterns
+        # Check if text matches recipe patterns
         has_recipe_pattern = any(
             re.search(p, full_text, re.IGNORECASE)
             for p in self.RECIPE_PATTERNS
         )
 
+        # Check if text matches venue pattern
         has_venue_pattern = any(
             re.search(p, full_text, re.IGNORECASE)
             for p in self.VENUE_PATTERNS
         )
 
         # Build signals
-        signals = {
+        signals: Dict[str, Any] = {
             "food_keyword_count": food_hits,
             "venue_keyword_count": venue_hits,
             "city_mentions": city_hits,
@@ -160,19 +161,19 @@ class CandidateGate:
     def _evaluate(self, food_hits, venue_hits, city_hits,
                   has_venue_pattern, has_recipe_pattern) -> bool:
         """
-        Core decision logic.
+        The core decision logic. It passes or fails a candidate.
 
-        Rules:
-        1. Must have at least 1 food keyword
-        2. If it has a venue pattern (maps/phone), auto-pass
-        3. If it has a recipe pattern, require stronger venue signals
-        4. Otherwise, need minimum venue + city context
+        Rules for passing a candidate:
+        1. A potential candidate must have at least 1 food keyword.
+        2. If a potential candidate has a venue pattern (maps/phone), the candidate is auto-passed.
+        3. If a  potential candidate has a recipe pattern, the candidate requires stronger venue signals to pass.
+        4. Otherwise, the potential candidate needs minimum venue + city context.
         """
-        # Rule 1: Must mention food
+        # Rule 1: Potential Candidate must mention food
         if food_hits < self.min_food_keywords:
             return False
 
-        # Rule 2: Strong venue evidence = instant pass
+        # Rule 2: For a potential candidate, strong venue evidence == instant pass
         if has_venue_pattern:
             return True
 
@@ -202,7 +203,7 @@ class CandidateGate:
 # Convenience function for pipeline use
 def passes_candidate_gate(text: str, title: str = "") -> Tuple[bool, Dict]:
     """
-    Simple function wrapper for use in pipelines.
+    Wrapper function for CandidateGate for easy use in pipelines.
 
     Example:
         passes, signals = passes_candidate_gate(text, title)
