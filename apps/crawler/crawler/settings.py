@@ -62,8 +62,8 @@ ITEM_PIPELINES = {
    "apps.crawler.crawler.pipelines.EnrichmentPipeline": 300,
    "apps.crawler.crawler.pipelines.ScorePipeline": 400,
    "apps.crawler.crawler.pipelines.DedupePipeline": 500,
-   "apps.crawler.crawler.pipelines.PublishPipeline": 600,
-   "apps.crawler.crawler.pipelines.StatsRecordingPipeline": 900,
+   # "apps.crawler.crawler.pipelines.PublishPipeline": 600,
+   # "apps.crawler.crawler.pipelines.StatsRecordingPipeline": 900,
 }
 
 # Enable and configure the AutoThrottle extension (disabled by default)
