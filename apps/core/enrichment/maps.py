@@ -122,7 +122,8 @@ class MapsLinkParser:
         try:
             parsed = urlparse(url)
             return parsed.netloc in self.SHORT_LINK_DOMAINS
-        except Exception:
+        except Exception as ex:
+            log.error(f"Failed to parse maps link: {url}: {ex}")
             return False
 
     def _expand_short_link(self, url: str) -> Optional[str]:
@@ -284,7 +285,7 @@ def enrich_from_maps_links(fields: dict, maps_links: list) -> dict:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    parser = MapsLinkParser()
+    parser_ = MapsLinkParser()
 
     test_urls = [
         # Direct coordinates
@@ -305,16 +306,16 @@ if __name__ == "__main__":
 
     print("\n=== Maps Link Parsing Tests ===\n")
 
-    for url in test_urls:
-        print(f"URL: {url}")
-        result = parser.parse(url)
+    for url_ in test_urls:
+        print(f"URL: {url_}")
+        result_ = parser_.parse(url_)
 
-        if result:
-            print(f"  ✓ Lat: {result['lat']}")
-            print(f"    Lng: {result['lng']}")
-            print(f"    Precision: {result['precision']}")
-            if result.get('place_id'):
-                print(f"    Place ID: {result['place_id']}")
+        if result_:
+            print(f"Lat: {result_['lat']}")
+            print(f"Lng: {result_['lng']}")
+            print(f"Precision: {result_['precision']}")
+            if result_.get('place_id'):
+                print(f"    Place ID: {result_['place_id']}")
         else:
             print(f"  ✗ Could not parse")
         print()
