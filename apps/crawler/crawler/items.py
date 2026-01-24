@@ -12,13 +12,18 @@ class CrawlerItem(scrapy.Item):
     pass
 
 class PageItem(scrapy.Item):
-    url =    scrapy.Field()
+    url = scrapy.Field()
     final_url = scrapy.Field()
     status_code = scrapy.Field()
-    html =   scrapy.Field()
+    html = scrapy.Field()
     fetched_at = scrapy.Field()
     source_id = scrapy.Field()
     discovery_type = scrapy.Field()
     score = scrapy.Field()
     signals = scrapy.Field(default=dict)
     candidate = scrapy.Field(default=dict)
+
+    gate_signals = scrapy.Field(default=dict)
+    extracted = scrapy.Field(default=dict)
+    enriched_fields = scrapy.Field(default=dict)
+
