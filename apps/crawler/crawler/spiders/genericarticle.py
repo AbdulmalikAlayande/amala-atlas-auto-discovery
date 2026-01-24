@@ -37,30 +37,18 @@ class GenericArticleSpider(scrapy.Spider):
         super().__init__(**kwargs)
         self.nlp = spacy.load("en_core_web_sm")
 
-
     def parse(self, response: Response, **kwargs: Any):
         item = PageItem()
 
-        img = response.xpath("//div[contains(@class, 'section-post-header')]//div[@class='image_wrapper']//img").attrib
-        phone = None
-        phone_data = response.xpath("//div[@class='section_wrapper']//div[@class='the_content_wrapper']//h3/span[contains(@style, 'font-size: 24pt;')]/span/strong//a[contains(@href, 'tel')]/@href").get()
-        if phone_data:
-            phone = phone_data.replace("tel:", "")
-
-        item['candidate'] = {
-            "price": response.xpath("string(//div[@class='entry-content-wrap clearfix']//table//tr[position()=4]//td[position()=3]//*[contains(translate(., 'TOTAL', 'total'), 'total')])").get(),
-            "address": response.xpath("//div[@class='section_wrapper']//div[@class='the_content_wrapper']//h3/span[contains(@style, 'font-size: 24pt;')]/span/strong//a[contains(@href, 'maps.app.goo.gl')]/text()").get(),
-            "title": response.xpath("//div[@class='section_wrapper']//div[@class='the_content_wrapper']//h3/span[contains(@style, 'font-size: 24pt;')]/text()").get(),
-            "location_url": response.xpath("//div[@class='section_wrapper']//div[@class='the_content_wrapper']//h3/span[contains(@style, 'font-size: 24pt;')]/span/strong//a[contains(@href, 'maps.app.goo.gl')]/@href").get(),
-            "phone": phone,
-            "image_url": img.get('src') if 'https' in img.get('src', '') else img.get('data-src'),
-        }
         item['url'] = response.url
+        item['final_url'] = response.url
         item['status_code'] = response.status
+        item['html'] = response.text
         item['fetched_at'] = datetime.now(timezone.utc)
+        item['discovery_type'] = getattr(self, 'discovery_type', 'manual')
+        item['source_id'] = getattr(self, 'source_id', None)
 
         yield item
-
 
     def fetch_sources(self, response):
         pass
