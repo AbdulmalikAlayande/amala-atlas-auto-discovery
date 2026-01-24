@@ -50,7 +50,7 @@ class SocialEnricher:
 
     def enrich_instagram(self, url: str) -> Optional[Dict]:
         """
-        Fetch basic info from Instagram profile.
+        Fetch basic info from an Instagram profile.
 
         Extracts:
         - Username
@@ -108,7 +108,7 @@ class SocialEnricher:
 
     def enrich_facebook(self, url: str) -> Optional[Dict]:
         """
-        Fetch basic info from Facebook page.
+        Fetch basic info from a Facebook page.
 
         Extracts:
         - Page name
@@ -187,8 +187,8 @@ class SocialEnricher:
                 import json
                 data = json.loads(match.group(1))
                 return data
-        except Exception:
-            pass
+        except Exception as ex:
+            log.error(f"Error extracting JSON-LD: {ex}")
 
         return {}
 
@@ -256,7 +256,7 @@ def enrich_from_socials(fields: dict, socials: dict) -> dict:
 
     # Use social data to fill gaps
     for platform, data in enriched.items():
-        # Fill name if missing
+        # Fill the name if missing
         if not fields.get('name') and data.get('name'):
             fields['name'] = data['name']
             log.info(f"Name filled from {platform}: {data['name']}")
@@ -277,7 +277,7 @@ def enrich_from_socials(fields: dict, socials: dict) -> dict:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    enricher = SocialEnricher()
+    enricher_ = SocialEnricher()
 
     test_profiles = [
         # Instagram (public profile)
@@ -289,20 +289,20 @@ if __name__ == "__main__":
 
     print("\n=== Social Media Enrichment Tests ===\n")
 
-    for url in test_profiles:
-        print(f"URL: {url}")
+    for url_ in test_profiles:
+        print(f"URL: {url_}")
 
-        if 'instagram.com' in url:
-            result = enricher.enrich_instagram(url)
-        elif 'facebook.com' in url:
-            result = enricher.enrich_facebook(url)
+        if 'instagram.com' in url_:
+            result_ = enricher_.enrich_instagram(url_)
+        elif 'facebook.com' in url_:
+            result_ = enricher_.enrich_facebook(url_)
         else:
-            result = None
+            result_ = None
 
-        if result:
-            print(f"  ✓ Platform: {result['platform']}")
-            print(f"    Name: {result.get('name', 'N/A')}")
-            print(f"    Description: {result.get('description', 'N/A')[:100]}...")
+        if result_:
+            print(f"  ✓ Platform: {result_['platform']}")
+            print(f"    Name: {result_.get('name', 'N/A')}")
+            print(f"    Description: {result_.get('description', 'N/A')[:100]}...")
         else:
             print(f"  ✗ Could not enrich")
         print()
