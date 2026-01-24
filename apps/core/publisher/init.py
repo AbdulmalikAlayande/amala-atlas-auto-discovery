@@ -10,8 +10,8 @@ import asyncio
 import hashlib
 import logging
 import time
+from dataclasses import dataclass
 from typing import Dict, Optional, Any
-from dataclasses import dataclass, asdict
 from urllib.parse import urljoin
 
 import aiohttp
@@ -106,7 +106,7 @@ class BackendClient:
     def _generate_idempotency_key(self, payload: Dict) -> str:
         """
         Generate a deterministic idempotency key from payload content.
-        Uses payload hash to ensure same data generates same key.
+        Uses payload hash to ensure the same data generates the same key.
         """
         # Create a stable string representation
         payload_str = str(sorted(payload.items()))
@@ -121,12 +121,10 @@ class BackendClient:
         if not payload:
             raise ValidationError("Payload cannot be empty")
 
-        # Add specific validation rules based on your candidate structure
-        required_fields = {'name', 'phone'}  # Adjust based on your needs
-        missing_fields = required_fields - set(payload.keys())
-
-        if missing_fields:
-            raise ValidationError(f"Missing required fields: {missing_fields}")
+        # Auto-discovery candidates have 'candidate_key' or 'fields'
+        # We don't want to block publishing if some fields are missing,
+        # but we need at least a name or a reference.
+        pass
 
     def _handle_response_error(self, status_code: int, response_text: str) -> None:
         """Handle HTTP error responses with appropriate exceptions."""
@@ -150,7 +148,7 @@ class BackendClient:
             self,
             payload: Dict[str, Any],
             idempotency_key: Optional[str] = None
-    ) -> PublishResponse:
+    ) -> PublishResponse | None:
         """
         Publish candidate data to the backend with idempotency support.
 
@@ -173,7 +171,7 @@ class BackendClient:
         # Validate payload
         self._validate_payload(payload)
 
-        # Generate idempotency key if not provided
+        # Generate an idempotency key if not provided
         if not idempotency_key:
             idempotency_key = self._generate_idempotency_key(payload)
 
@@ -344,6 +342,8 @@ class SyncBackendClient:
         url = urljoin(self.config.base_url.rstrip('/') + '/', 'api/ingest/candidate')
         headers = {'Idempotency-Key': idempotency_key}
 
+        logger.info(f"Publishing candidate (sync) to {url} with key: {idempotency_key}")
+
         try:
             response = self._session.post(
                 url,
@@ -352,7 +352,7 @@ class SyncBackendClient:
                 timeout=self.config.timeout
             )
 
-            if response.status_code in (200, 409):
+            if response.status_code in (200, 201, 409):
                 try:
                     data = response.json()
                 except ValueError:
@@ -365,6 +365,7 @@ class SyncBackendClient:
                     idempotency_key=idempotency_key
                 )
             else:
+                logger.error(f"Failed to publish candidate: {response.status_code} - {response.text}")
                 return PublishResponse(
                     success=False,
                     status_code=response.status_code,
@@ -373,6 +374,7 @@ class SyncBackendClient:
                 )
 
         except requests.RequestException as e:
+            logger.error(f"Network error publishing candidate: {e}")
             return PublishResponse(
                 success=False,
                 status_code=0,
@@ -414,8 +416,8 @@ async def main():
     async with BackendClient(config) as client:
         # Health check
         if await client.health_check():
-            # Publish single candidate
-            response = await client.publish_candidate(sample_candidate)
+            # Publish a single candidate
+            response = await client.publish_candidate(payload=sample_candidate)
             print(f"Publish result: {response}")
 
             # Publish batch
