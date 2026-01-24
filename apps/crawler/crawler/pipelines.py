@@ -362,6 +362,9 @@ class StatsRecordingPipeline:
         duplicate = False
         drop_reason = None
 
+        # Prepare signals for recording - ensuring it's JSON serializable if needed
+        # (The manager might already handle this, but we should be clean)
+
         # Record to database
         try:
             self.manager.record_page_result(
@@ -389,13 +392,13 @@ class StatsRecordingPipeline:
         try:
             self.manager.record_page_result(
                 crawl_run_id=self.crawl_run_id,
-                url=request.url_,
+                url=request.url,
                 status_code=0,
                 passed_gate=False,
                 drop_reason=f"Exception: {type(exception).__name__}",
             )
         except Exception as e:
-            log.error(f"Failed to record exception for {request.url_}: {e}")
+            log.error(f"Failed to record exception for {request.url}: {e}")
 
 
 class DropItemRecordingPipeline:
