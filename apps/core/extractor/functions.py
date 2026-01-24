@@ -43,10 +43,12 @@ def extract_jsonld(html: str) -> dict | None:
     try:
         import extruct
         data = extruct.extract(html, syntaxes=["json-ld"], errors="ignore")
+        log.info(f"Extracted JSON-LD count: {len(data.get('json-ld', []))}")
         for obj in data.get("json-ld", []):
             t = obj.get("@type")
-            if t in ("Restaurant", "LocalBusiness") or (
-                    isinstance(t, list) and any(x in ("Restaurant", "LocalBusiness") for x in t)):
+            log.info(f"Checking JSON-LD type: {t}")
+            if t in ("Restaurant", "LocalBusiness", "FoodEstablishment") or (
+                    isinstance(t, list) and any(x in ("Restaurant", "LocalBusiness", "FoodEstablishment") for x in t)):
                 addr = obj.get("address")
                 # address can be dict or string
                 if isinstance(addr, dict):
