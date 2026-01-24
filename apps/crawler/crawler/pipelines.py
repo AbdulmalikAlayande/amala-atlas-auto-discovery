@@ -12,9 +12,10 @@ from apps.core.enrichment.maps import enrich_from_maps_links
 from apps.core.enrichment.social import enrich_from_socials
 from apps.core.extractor.functions import extract_readable, extract_jsonld, extract_outlinks
 from apps.core.nlp.fields import find_phone, find_city_hits
-from apps.core.nlp.gate import passes_candidate_gate
+from apps.core.nlp.gate import passes_candidate_gate, CandidateGate
 from apps.core.publisher.init import ClientConfig, SyncBackendClient
 from apps.core.scoring.rules import score as score_page
+from apps.sources.source_manager import SourceManager
 
 log = logging.getLogger(__name__)
 load_dotenv()
@@ -35,7 +36,9 @@ class NLPGatePipeline:
         text = readable.get("text", "")
         title = readable.get("title", "")
 
-        passes, gate_signals = passes_candidate_gate(text, title)
+        # Use the gate with softened word count
+        gate = CandidateGate()
+        passes, gate_signals = gate.passes_gate(text, title)
 
         if not passes:
             fail_reason = gate_signals.get("fail_reason", "unknown")
@@ -58,17 +61,17 @@ class ExtractSignalsPipeline:
         readable = extract_readable(html)
         jsonld = extract_jsonld(html)
         outlinks = extract_outlinks(html, final_url)
-        phone = find_phone(readable.get("text", ""))
+        phone_data = find_phone(readable.get("text", ""))
         city_hits = find_city_hits(readable.get("text", ""), TARGET_CITIES)
 
-        signals = self.build_signals(jsonld, outlinks, readable, phone, city_hits)
+        signals = self.build_signals(jsonld, outlinks, readable, phone_data, city_hits)
 
         # Store extracted data for enrichment stage
         item['extracted'] = {
             'readable': readable,
             'jsonld': jsonld,
             'outlinks': outlinks,
-            'phone': phone,
+            'phone_data': phone_data,
             'city_hits': city_hits,
         }
 
@@ -76,11 +79,11 @@ class ExtractSignalsPipeline:
         item['signals'] = signals
         return item
 
-    def build_signals(self, jsonld, outlinks, readable, phone, city_hits):
+    def build_signals(self, jsonld, outlinks, readable, phone_data, city_hits):
         return {
             "has_jsonld_restaurant": bool(jsonld and jsonld.get("name") and jsonld.get("address")),
             "has_maps_link": bool(outlinks.get("maps_links")),
-            "has_phone": bool(phone),
+            "has_phone": bool(phone_data),
             "recent_content": bool(readable.get("is_recent")),
             "city_hit_near_food_terms": bool(city_hits),
         }
@@ -99,14 +102,16 @@ class EnrichmentPipeline:
 
         # Build initial fields from extraction
         jsonld = extracted.get('jsonld', {})
-        phone = extracted.get('phone')
+        phone_data = extracted.get('phone_data')
+        phone = phone_data.get('value') if phone_data else None
         city_hits = extracted.get('city_hits', [])
+        city = city_hits[0].get('value') if city_hits else None
         outlinks = extracted.get('outlinks', {})
 
         fields = {
             "name": jsonld.get("name") if jsonld else None,
             "address": jsonld.get("address") if jsonld else None,
-            "city": city_hits[0] if city_hits else None,
+            "city": city,
             "country": "Nigeria",
             "phone": phone,
             "hours": jsonld.get("openingHours") if jsonld else None,
@@ -175,6 +180,8 @@ class ScorePipeline:
         readable = extracted.get('readable', {})
         jsonld = extracted.get('jsonld', {})
         outlinks = extracted.get('outlinks', {})
+        phone_data = extracted.get('phone_data', {})
+        city_hits = extracted.get('city_hits', [])
 
         return {
             "fields": fields,
@@ -184,6 +191,8 @@ class ScorePipeline:
                 "source_url": final_url,
                 "title": readable.get("title"),
                 "excerpt": (readable.get("text", "")[:500] or "").strip(),
+                "phone_snippet": phone_data.get('snippet') if phone_data else None,
+                "city_snippets": [c.get('snippet') for c in city_hits],
                 "jsonld": jsonld,
                 "maps_links": outlinks.get("maps_links", []),
             },
@@ -191,7 +200,7 @@ class ScorePipeline:
                 "source_id": source_id,
                 "discovery_type": discovery_type,
                 "fetched_at": fetched_at,
-                "extractor_version": "v0.2.0",
+                "extractor_version": "v0.3.0",
             },
             "candidate_key": hashlib.sha256((final_url or "").encode("utf-8")).hexdigest(),
         }
@@ -295,3 +304,136 @@ class PublishPipeline:
             raise DropItem(f"Publish error: {e}")
 
         return item
+
+
+class StatsRecordingPipeline:
+    """
+    Record crawl statistics to database.
+
+    This should run LAST so we know the final outcome of each page.
+    """
+
+    def __init__(self):
+        self.manager = None
+        self.crawl_run_id = None
+        self.source_id = None
+
+    def open_spider(self, spider):
+        """Initialize on spider start."""
+        # Get crawl_run_id from spider args
+        self.crawl_run_id = getattr(spider, 'crawl_run_id', None)
+        self.source_id = getattr(spider, 'source_id', None)
+
+        if self.crawl_run_id:
+            log.info(f"Stats recording enabled for crawl_run_id={self.crawl_run_id}")
+            self.manager = SourceManager()
+        else:
+            log.warning("No crawl_run_id provided - stats recording disabled")
+
+    def close_spider(self, spider):
+        """Clean up on spider close."""
+        if self.manager:
+            # Mark crawl run as completed
+            if self.crawl_run_id:
+                self.manager.complete_crawl_run(self.crawl_run_id, success=True)
+
+            self.manager.close()
+
+    def process_item(self, item, spider):
+        """Record page result if stats tracking is enabled."""
+        if not self.manager or not self.crawl_run_id:
+            return item
+
+        # Extract info from item
+        url = item.get('url') or item.get('final_url')
+        status_code = item.get('status_code', 0)
+
+        # Determine outcome
+        gate_signals = item.get('gate_signals', {})
+        passed_gate = gate_signals.get('gate_decision') == 'PASS'
+
+        candidate = item.get('candidate', {})
+        score = candidate.get('score') or item.get('score')
+
+        signals = item.get('signals', {})
+
+        # Check if published (if we got this far, it was published)
+        published = True
+        duplicate = False
+        drop_reason = None
+
+        # Record to database
+        try:
+            self.manager.record_page_result(
+                crawl_run_id=self.crawl_run_id,
+                url=url,
+                status_code=status_code,
+                passed_gate=passed_gate,
+                score=score,
+                published=published,
+                duplicate=duplicate,
+                drop_reason=drop_reason,
+                signals=signals,
+            )
+        except Exception as e:
+            log.error(f"Failed to record stats for {url}: {e}")
+
+        return item
+
+    def process_exception(self, request, exception, spider):
+        """Record when a page fails."""
+        if not self.manager or not self.crawl_run_id:
+            return
+
+        # Record failed page
+        try:
+            self.manager.record_page_result(
+                crawl_run_id=self.crawl_run_id,
+                url=request.url_,
+                status_code=0,
+                passed_gate=False,
+                drop_reason=f"Exception: {type(exception).__name__}",
+            )
+        except Exception as e:
+            log.error(f"Failed to record exception for {request.url_}: {e}")
+
+
+class DropItemRecordingPipeline:
+    """
+    Catch dropped items and record why they were dropped.
+
+    This needs to wrap other pipelines to capture their DropItem exceptions.
+    """
+
+    def __init__(self):
+        self.manager = None
+        self.crawl_run_id = None
+
+    def open_spider(self, spider):
+        self.crawl_run_id = getattr(spider, 'crawl_run_id', None)
+        if self.crawl_run_id:
+            self.manager = SourceManager()
+
+    def close_spider(self, spider):
+        if self.manager:
+            self.manager.close()
+
+    def process_item(self, item, spider):
+        """Let items pass through."""
+        return item
+
+    # Example: Update generic spider to accept crawl_run_id
+    """
+    # In generic.py:
+    
+    def __init__(self, start_urls=None, discovery_type="manual", source_id=None, 
+                 crawl_run_id=None, *args, **kwargs):
+        super(GenericSpider, self).__init__(*args, **kwargs)
+        if start_urls:
+            self.start_urls = start_urls.split(',')
+        else:
+            self.start_urls = []
+        self.discovery_type = discovery_type
+        self.source_id = source_id
+        self.crawl_run_id = crawl_run_id  # NEW
+    """
