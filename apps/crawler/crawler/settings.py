@@ -52,17 +52,18 @@ DOWNLOADER_MIDDLEWARES = {
     'scrapy_user_agents.middlewares.RandomUserAgentMiddleware': 400,
 }
 
-# Enable or disable extensions
-# See https://docs.scrapy.org/en/latest/topics/extensions.html
-#EXTENSIONS = {
-#    "scrapy.extensions.telnet.TelnetConsole": None,
-#}
+EXTENSIONS = {
+   "scrapy.extensions.telnet.TelnetConsole": None,
+}
 
 ITEM_PIPELINES = {
-   "apps.crawler.crawler.pipelines.ExtractSignalsPipeline": 100,
-   "apps.crawler.crawler.pipelines.ScorePipeline": 200,
-   "apps.crawler.crawler.pipelines.DedupePipeline": 300,
-   "apps.crawler.crawler.pipelines.PublishPipeline": 400,
+   "apps.crawler.crawler.pipelines.NLPGatePipeline": 100,
+   "apps.crawler.crawler.pipelines.ExtractSignalsPipeline": 200,
+   "apps.crawler.crawler.pipelines.EnrichmentPipeline": 300,
+   "apps.crawler.crawler.pipelines.ScorePipeline": 400,
+   "apps.crawler.crawler.pipelines.DedupePipeline": 500,
+   "apps.crawler.crawler.pipelines.PublishPipeline": 600,
+   "apps.crawler.crawler.pipelines.StatsRecordingPipeline": 900,
 }
 
 # Enable and configure the AutoThrottle extension (disabled by default)
